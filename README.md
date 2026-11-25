@@ -94,7 +94,28 @@ claude mcp add -s user kuport -- <PATH>\.venv\Scripts\python.exe <PATH>\server.p
 
 ### ChatGPT デスクトップアプリ（Codex）/ Codex CLI
 
-`%USERPROFILE%\.codex\config.toml` に追加します。ChatGPT デスクトップアプリでは **Codex（ローカル実行）の会話**でのみ使えます。
+ChatGPT デスクトップアプリ（Windows では Microsoft Store の「ChatGPT」。中身は Codex と一体）と Codex CLI は、同じ設定ファイル `%USERPROFILE%\.codex\config.toml` を使います。
+ChatGPT デスクトップアプリでは **Codex（ローカル実行）の会話**でのみ使えます（普通のチャットからは使えません）。
+
+**1. Codex を入れる**（どちらか）
+
+- ChatGPT デスクトップアプリ: Microsoft Store で「ChatGPT」を入れてサインインする
+- Codex CLI: `npm install -g @openai/codex` で入れて、`codex` を実行してサインインする
+
+**2. kuport を登録する**
+
+Codex CLI が使えるなら、コマンド1つで登録できます。
+
+```powershell
+codex mcp add kuport --env KUPORT_PROFILE_DIR=profile-codex -- <PATH>\.venv\Scripts\python.exe <PATH>\server.py
+```
+
+`codex mcp list` に `kuport` が `enabled` で出れば登録できています。
+
+**3. 設定を調整する（推奨）**
+
+ブラウザ操作で1回あたり数秒〜十数秒かかるので、`config.toml` の `[mcp_servers.kuport]` にタイムアウトを足しておくと安心です。
+CLI を使わない場合は、次の内容を `config.toml` に直接書いても登録できます。
 
 ```toml
 [mcp_servers.kuport]
@@ -107,6 +128,17 @@ tool_timeout_sec = 120
 
 [mcp_servers.kuport.env]
 KUPORT_PROFILE_DIR = "profile-codex"
+```
+
+`default_tools_approval_mode` は `[mcp_servers.kuport.env]` より上に書いてください（下に書くと環境変数として扱われ、効きません）。
+
+**4. 使う**
+
+ChatGPT デスクトップアプリ（または Codex CLI）を再起動し、Codex の**新しいスレッド**で「今日の授業教えて」などと聞きます。
+新しいプロファイル（`profile-codex`）は初回にワンタイムパスワードが要るので、「ワンタイムパスワードが必要です」と出たら次でログインしてください。
+
+```powershell
+$env:KUPORT_PROFILE_DIR = "profile-codex"; .\.venv\Scripts\python.exe capture.py
 ```
 
 ## スマホから使う
