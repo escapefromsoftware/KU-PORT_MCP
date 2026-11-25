@@ -109,6 +109,29 @@ tool_timeout_sec = 120
 KUPORT_PROFILE_DIR = "profile-codex"
 ```
 
+## スマホから使う
+
+スマホのアプリから PC 上のエージェントを遠隔操作する方法なら、サーバーをインターネットに公開せずに使えます。
+処理はすべて PC で動くので、使う間は **PC を起動したまま（スリープしない設定）** にしてください。
+
+### Claude（Claude Code の Remote Control）
+
+1. PC で、`.mcp.json` などで kuport を登録したフォルダに移動して Remote Control を起動します（起動中のセッションで `/remote-control` と打っても可）。
+   ```powershell
+   cd <kuport を登録したフォルダ>
+   claude remote-control
+   ```
+   `Connected` と表示されれば待ち受け状態です。Spawn mode は `same-dir` にしてください（`w` で切り替え）。プロジェクト単位で登録した kuport を確実に読み込むためです。
+2. スマホの Claude アプリで「Code」タブを開き、一覧からそのセッションを選びます（ターミナルでスペースキーを押すと出る QR コードを読み取っても可）。
+3. 新しいセッションで「今日の授業教えて」などと聞きます。
+
+ターミナルを閉じるとセッションも終わります。詳しくは [Claude Code Docs: Remote Control](https://code.claude.com/docs/en/remote-control) を参照してください。
+
+### Gemini（Antigravity の Remote Control）
+
+Antigravity の Remote Control を使うと、スマホのブラウザから PC 上の Antigravity のセッションを操作できます（同じ Google アカウントでログインが必要）。
+詳しくは [Antigravity Docs: Remote Control](https://antigravity.google/docs/remote-control) を参照してください。Gemini アプリ単体からは使えません。
+
 ### Web 版（ChatGPT / Claude / Gemini）について
 
 Web 版はクラウド上で動くため、PC の中のこのサーバーには接続できません。
