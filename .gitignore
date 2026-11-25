@@ -7,3 +7,6 @@ dumps/
 __pycache__/
 fixtures/
 downloads/
+# テストは個人の画面データ(fixtures)に依存するため公開しない
+tests/
+.pytest_cache/
