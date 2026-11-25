@@ -1,0 +1,6 @@
+mcp>=2.3,<3
+playwright>=1.65
+python-dotenv>=1.0
+beautifulsoup4>=4.12
+# テスト用
+pytest>=8

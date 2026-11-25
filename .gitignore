@@ -1,0 +1,9 @@
+# 認証情報・Cookie・個人情報を含むものは絶対にコミットしない
+.env
+profile/
+profile-*/
+dumps/
+.venv/
+__pycache__/
+fixtures/
+downloads/
