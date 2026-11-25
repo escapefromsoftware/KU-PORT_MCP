@@ -127,6 +127,12 @@ KUPORT_PROFILE_DIR = "profile-codex"
 
 ターミナルを閉じるとセッションも終わります。詳しくは [Claude Code Docs: Remote Control](https://code.claude.com/docs/en/remote-control) を参照してください。
 
+### ChatGPT（Codex のリモート）
+
+1. PC で、`config.toml` に kuport を登録した ChatGPT デスクトップアプリ（Codex）を起動しておきます。
+2. スマホの Codex のリモート機能で、接続先としてその PC を選びます。
+3. 「今日の授業教えて」などと聞きます。処理は PC 上の Codex で動き、kuport もそのまま使えます。
+
 ### Gemini（Antigravity の Remote Control）
 
 Antigravity の Remote Control を使うと、スマホのブラウザから PC 上の Antigravity のセッションを操作できます（同じ Google アカウントでログインが必要）。
