@@ -46,6 +46,29 @@ SHOW_ALL_TITLE = "このグループに配信されているすべての掲示�
 ATTACH_TITLE = "登録されている添付ファイルを表示します。"
 
 
+def _ps_quote(value: str) -> str:
+    # PowerShell の単一引用符文字列にする(中の ' は '' に重ねる)
+    return "'" + value.replace("'", "''") + "'"
+
+
+def manual_login_instructions(root: Path = ROOT, profile_dir: Path = PROFILE_DIR) -> str:
+    """手動ログインの案内文。PowerShell にそのまま貼り付けられるコマンドを含める。
+
+    システム側の Python では Playwright が見つからないので、必ずこのプロジェクトの .venv の Python を使わせる。
+    プロファイルは MCP が実際に使っているもの(PROFILE_DIR)を絶対パスで指定する。
+    """
+    commands = "\n".join([
+        f"Set-Location -LiteralPath {_ps_quote(str(root))}",
+        f"$env:KUPORT_PROFILE_DIR = {_ps_quote(str(profile_dir))}",
+        r".\.venv\Scripts\python.exe capture.py",
+    ])
+    return (
+        "手動ログインが必要です。次の3行を PowerShell に貼り付けて実行し、開いた Edge でログイン"
+        "(ワンタイムパスワード含む)してから、ターミナルで q を入力して Enter を押してください。"
+        "その後、もう一度ツールを呼んでください。\n" + commands
+    )
+
+
 class Portal:
     def __init__(self) -> None:
         load_dotenv(ROOT / ".env")
@@ -86,14 +109,20 @@ class Portal:
         return self._page
 
     async def close(self) -> None:
-        if self._ctx:
-            try:
-                await self._ctx.close()
-            except Exception:
-                pass
-        if self._pw:
-            await self._pw.stop()
-        self._pw = self._ctx = self._page = None
+        """Edge と Playwright を閉じ、保持している参照を空にする(途中で失敗しても参照は必ず空にする)。"""
+        try:
+            if self._ctx:
+                try:
+                    await self._ctx.close()
+                except Exception:
+                    pass
+            if self._pw:
+                try:
+                    await self._pw.stop()
+                except Exception:
+                    pass
+        finally:
+            self._pw = self._ctx = self._page = None
 
     # ------------------------------------------------------------------ 共通ヘルパー
 
@@ -153,14 +182,11 @@ class Portal:
 
     async def _login(self, page: Page) -> None:
         """統合認証(SECIOSS)でユーザー名 → パスワードを入力する。ワンタイムパスワードが出たら手動に回す。"""
-        env_hint = "" if PROFILE_DIR.name == "profile" else f"(環境変数 KUPORT_PROFILE_DIR={PROFILE_DIR.name} を付けて)"
-        manual = (
-            f"KUPORT-MCP で capture.py を{env_hint}実行し、表示されたブラウザで手動ログイン"
-            "(ワンタイムパスワード含む)してから q で閉じてください。"
-        )
+        manual = manual_login_instructions()
         if not (self.user_id and self.password):
             raise LoginRequired(
-                "ログインが切れています。.env に KUPORT_ID と KUPORT_PASSWORD を設定するか、" + manual
+                "ログインが切れています。.env に KUPORT_ID と KUPORT_PASSWORD を設定すると自動ログインできます。"
+                "設定しない場合は" + manual
             )
 
         loop = asyncio.get_running_loop()
@@ -251,6 +277,8 @@ class Portal:
                 try:
                     return await op()
                 except LoginRequired:
+                    # 手動ログイン(capture.py)が同じプロファイルで Edge を開けるよう、こちらの Edge を閉じておく
+                    await self.close()
                     raise
                 except Exception as e:
                     if attempt == 0 and await self._logged_out():
