@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 import unicodedata
 from pathlib import Path
 
@@ -23,6 +24,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # ブラウザのプロファイル(Cookie)の置き場所。同じプロファイルは同時に1つのブラウザしか開けないので、
 # Claude Code とデスクトップアプリのように複数のクライアントから使うときは KUPORT_PROFILE_DIR で分ける
 PROFILE_DIR = ROOT / (os.getenv("KUPORT_PROFILE_DIR") or "profile")
+
+# 別のプロセス(他の MCP クライアント)がプロファイルを使っていたら、このファイルを置いて手放してもらう。
+# 使っている側は定期的にこれを見て、自分の起動より新しい依頼があれば Edge を閉じる(後から来た側が優先)
+RELEASE_REQUEST = PROFILE_DIR / "kuport-release-request"
+TAKEOVER_TIMEOUT_S = 45
 
 # 画面遷移や Ajax の待ち時間(ミリ秒)
 NAV_TIMEOUT_MS = 30_000
@@ -78,6 +84,15 @@ class Portal:
         self.password = os.getenv("KUPORT_PASSWORD") or ""
         # デバッグ時は KUPORT_HEADLESS=0 にするとブラウザが見える
         self.headless = os.getenv("KUPORT_HEADLESS", "1") != "0"
+        # 最後の操作からこの秒数だけ使われなければ Edge を閉じ、プロファイルを手放す(capture.py や他のクライアントが使えるように)。
+        # 0 なら操作のたびに閉じる。負の数なら閉じない(サーバー終了まで開いたまま)
+        try:
+            self.idle_seconds = float(os.getenv("KUPORT_IDLE_SECONDS", "60"))
+        except ValueError:
+            self.idle_seconds = 60.0
+        self._watch_task: asyncio.Task | None = None
+        self._last_used = 0.0
+        self._started_at = 0.0  # Edge を起動した時刻(time.time())。これより古い解放依頼は無視する
         self._lock = asyncio.Lock()
         self._pw: Playwright | None = None
         self._ctx: BrowserContext | None = None
@@ -92,22 +107,70 @@ class Portal:
             raise PortalError("KUPORT-MCP/.env に PORTAL_URL が設定されていません。")
         if self._pw is None:
             self._pw = await async_playwright().start()
-        try:
-            self._ctx = await self._pw.chromium.launch_persistent_context(
-                str(PROFILE_DIR),
-                channel="msedge",
-                headless=self.headless,
-                viewport={"width": 1280, "height": 900},
-            )
-        except Exception as e:
-            # 同じプロファイルを capture.py 等が開いているとロックで起動できない
-            raise PortalError(
-                "ブラウザを起動できませんでした。capture.py など profile/ を使うブラウザが開いていたら閉じてください。"
-                f"\n詳細: {e}"
-            ) from e
+        self._ctx = await self._launch()
+        self._started_at = time.time()
+        self._last_used = asyncio.get_running_loop().time()
+        if self._watch_task is None or self._watch_task.done():
+            self._watch_task = asyncio.create_task(self._watch())
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
         self._page.set_default_timeout(NAV_TIMEOUT_MS)
         return self._page
+
+    async def _launch(self) -> BrowserContext:
+        """Edge を起動する。プロファイルが使用中なら、使っている側に解放を依頼して起動をやり直す。"""
+        loop = asyncio.get_running_loop()
+        deadline = None
+        while True:
+            try:
+                ctx = await self._pw.chromium.launch_persistent_context(
+                    str(PROFILE_DIR),
+                    channel="msedge",
+                    headless=self.headless,
+                    viewport={"width": 1280, "height": 900},
+                    timeout=NAV_TIMEOUT_MS,
+                )
+            except Exception as e:
+                if deadline is None:
+                    deadline = loop.time() + TAKEOVER_TIMEOUT_S
+                elif loop.time() >= deadline:
+                    RELEASE_REQUEST.unlink(missing_ok=True)
+                    raise PortalError(
+                        "ブラウザを起動できませんでした。profile/ を別のブラウザが使っていて、解放を依頼しても手放されませんでした。"
+                        "capture.py を開いていたら閉じてください。古い版の KU-PORT MCP が動いているクライアントがあれば、再起動してください。"
+                        f"\n詳細: {e}"
+                    ) from e
+                # 毎回更新する(使っている側が一度閉じてすぐ開き直しても、依頼が新しいまま見えるように)
+                try:
+                    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                    RELEASE_REQUEST.touch()
+                except OSError:
+                    pass
+                await asyncio.sleep(1.5)
+                continue
+            if deadline is not None:
+                RELEASE_REQUEST.unlink(missing_ok=True)
+            return ctx
+
+    def _release_requested(self) -> bool:
+        try:
+            return RELEASE_REQUEST.stat().st_mtime > self._started_at
+        except OSError:
+            return False
+
+    def _idle(self) -> bool:
+        return self.idle_seconds >= 0 and asyncio.get_running_loop().time() - self._last_used >= self.idle_seconds
+
+    async def _watch(self) -> None:
+        """Edge を開いている間、1秒ごとに「しばらく使われていない」「他から解放を頼まれた」を確認し、該当すれば閉じる。
+        操作中はロックが空くまで待つので、実行中のツールを途中で止めることはない。"""
+        while self._ctx is not None:
+            await asyncio.sleep(1)
+            if self._ctx is None or not (self._idle() or self._release_requested()):
+                continue
+            async with self._lock:
+                # ロック待ちの間に操作があれば _last_used が新しくなっているので、条件を確認し直す
+                if self._ctx is not None and (self._idle() or self._release_requested()):
+                    await self.close()
 
     async def close(self) -> None:
         """Edge と Playwright を閉じ、保持している参照を空にする(途中で失敗しても参照は必ず空にする)。"""
@@ -274,20 +337,24 @@ class Portal:
     async def _run(self, op):
         """操作 op を排他実行する。途中でポータルからログアウトされていたら、ログインし直して1回だけやり直す。"""
         async with self._lock:
-            for attempt in range(2):
-                try:
-                    return await op()
-                except LoginRequired:
-                    # 手動ログイン(capture.py)が同じプロファイルで Edge を開けるよう、こちらの Edge を閉じておく
-                    await self.close()
-                    raise
-                except Exception as e:
-                    if attempt == 0 and await self._logged_out():
-                        continue  # 次の op() はトップを開き直すところから始まるので、そこで再ログインされる
-                    if isinstance(e, PortalError):
+            try:
+                for attempt in range(2):
+                    try:
+                        return await op()
+                    except LoginRequired:
+                        # 手動ログイン(capture.py)が同じプロファイルで Edge を開けるよう、こちらの Edge を閉じておく
+                        await self.close()
                         raise
-                    # Playwright のタイムアウトなど想定外の例外も、内容が Claude に伝わるよう PortalError にする
-                    raise PortalError(f"ポータル操作中にエラーが発生しました: {type(e).__name__}: {str(e)[:500]}") from e
+                    except Exception as e:
+                        if attempt == 0 and await self._logged_out():
+                            continue  # 次の op() はトップを開き直すところから始まるので、そこで再ログインされる
+                        if isinstance(e, PortalError):
+                            raise
+                        # Playwright のタイムアウトなど想定外の例外も、内容が Claude に伝わるよう PortalError にする
+                        raise PortalError(f"ポータル操作中にエラーが発生しました: {type(e).__name__}: {str(e)[:500]}") from e
+            finally:
+                # 成功・失敗どちらでも、ここから idle_seconds 秒使われなければ _watch が Edge を閉じる
+                self._last_used = asyncio.get_running_loop().time()
 
     async def _logged_out(self) -> bool:
         if not self._page or self._page.is_closed():
