@@ -1,4 +1,4 @@
-"""Ku-Port をブラウザ(Playwright + Edge)で操作して、各画面の HTML を取ってくる層。
+"""Ku-Port をブラウザ(Playwright + Edge または Chrome)で操作して、各画面の HTML を取ってくる層。
 
 - 解析はしない(kuport/parsers.py の担当)。ここは「目的の画面を表示して HTML を返す」ことだけに責任を持つ。
 - Ku-Port は JSF なので URL 直打ちでの遷移はできない。毎回トップを開き、メニューの文字を頼りに遷移する。
@@ -21,9 +21,21 @@ from mcp.server.mcpserver.exceptions import ToolError
 from playwright.async_api import BrowserContext, Page, Playwright, async_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
+# 下の設定を .env にも書けるよう先に読む(すでに環境変数にある値は上書きしない)
+load_dotenv(ROOT / ".env")
+
+# 使うブラウザ(Playwright の channel)。KUPORT_BROWSER=chrome で Google Chrome、既定は Edge
+BROWSER_NAMES = {"msedge": "Edge", "chrome": "Chrome"}
+_browser = (os.getenv("KUPORT_BROWSER") or "msedge").strip().lower()
+BROWSER_CHANNEL = "msedge" if _browser == "edge" else _browser
+BROWSER_NAME = BROWSER_NAMES.get(BROWSER_CHANNEL, BROWSER_CHANNEL)
+
 # ブラウザのプロファイル(Cookie)の置き場所。同じプロファイルは同時に1つのブラウザしか開けないので、
-# Claude Code とデスクトップアプリのように複数のクライアントから使うときは KUPORT_PROFILE_DIR で分ける
-PROFILE_DIR = ROOT / (os.getenv("KUPORT_PROFILE_DIR") or "profile")
+# Claude Code とデスクトップアプリのように複数のクライアントから使うときは KUPORT_PROFILE_DIR で分ける。
+# ブラウザの種類が違うとプロファイルの中身も違うので、Edge 以外の既定は profile-<ブラウザ> にする
+PROFILE_DIR = ROOT / (
+    os.getenv("KUPORT_PROFILE_DIR") or ("profile" if BROWSER_CHANNEL == "msedge" else f"profile-{BROWSER_CHANNEL}")
+)
 
 # 別のプロセス(他の MCP クライアント)がプロファイルを使っていたら、このファイルを置いて手放してもらう。
 # 使っている側は定期的にこれを見て、自分の起動より新しい依頼があれば Edge を閉じる(後から来た側が優先)
@@ -67,10 +79,11 @@ def manual_login_instructions(root: Path = ROOT, profile_dir: Path = PROFILE_DIR
     commands = "\n".join([
         f"Set-Location -LiteralPath {_ps_quote(str(root))}",
         f"$env:KUPORT_PROFILE_DIR = {_ps_quote(str(profile_dir))}",
+        f"$env:KUPORT_BROWSER = {_ps_quote(BROWSER_CHANNEL)}",
         r".\.venv\Scripts\python.exe capture.py",
     ])
     return (
-        "手動ログインが必要です。次の3行を PowerShell に貼り付けて実行し、開いた Edge でログイン"
+        f"手動ログインが必要です。次の4行を PowerShell に貼り付けて実行し、開いた {BROWSER_NAME} でログイン"
         "(ワンタイムパスワード含む)してから、ターミナルで q を入力して Enter を押してください。"
         "その後、もう一度ツールを呼んでください。\n" + commands
     )
@@ -118,13 +131,17 @@ class Portal:
 
     async def _launch(self) -> BrowserContext:
         """Edge を起動する。プロファイルが使用中なら、使っている側に解放を依頼して起動をやり直す。"""
+        if BROWSER_CHANNEL not in BROWSER_NAMES:
+            raise PortalError(
+                f"KUPORT_BROWSER={BROWSER_CHANNEL} には対応していません。使えるのは {', '.join(BROWSER_NAMES)} です。"
+            )
         loop = asyncio.get_running_loop()
         deadline = None
         while True:
             try:
                 ctx = await self._pw.chromium.launch_persistent_context(
                     str(PROFILE_DIR),
-                    channel="msedge",
+                    channel=BROWSER_CHANNEL,
                     headless=self.headless,
                     viewport={"width": 1280, "height": 900},
                     timeout=NAV_TIMEOUT_MS,

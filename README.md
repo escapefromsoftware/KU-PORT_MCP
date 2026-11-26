@@ -1,7 +1,7 @@
 # KUPORT-MCP
 
 工学院大学の学生ポータル **Ku-Port** を、Claude・ChatGPT（Codex）・Antigravity などの MCP クライアントから使えるようにする非公式の MCP サーバーです。
-Ku-Port には API がないため、Playwright で Microsoft Edge を操作して画面を読み取ります。
+Ku-Port には API がないため、Playwright で Microsoft Edge（または Google Chrome）を操作して画面を読み取ります。
 
 > **非公式ツールです。** 大学・ポータル提供元とは無関係です。利用は自己責任で、大学の情報システム利用規程に従ってください。
 > ログイン情報・成績などはすべて自分の PC の中だけで扱い、外部に公開しない設計にしています（後述）。
@@ -24,7 +24,8 @@ Ku-Port には API がないため、Playwright で Microsoft Edge を操作し�
 
 ## 必要なもの
 
-- Windows（Microsoft Edge を使います）
+- Windows と Microsoft Edge（既定）または Google Chrome
+  - Chrome を使うときは `.env` に `KUPORT_BROWSER=chrome` と書きます。プロファイルは Edge と別の `profile-chrome/` になります（初回はログインし直しになることがあります）
 - Python 3.10 以上
 - Ku-Port のアカウント（統合認証のユーザー名・パスワード）
 

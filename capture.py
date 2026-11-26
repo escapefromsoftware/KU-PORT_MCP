@@ -17,9 +17,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import Page, sync_playwright
 
-ROOT = Path(__file__).resolve().parent
-# portal.py と同じく KUPORT_PROFILE_DIR でプロファイルを切り替えられる(例: profile-desktop)
-PROFILE_DIR = ROOT / (os.getenv("KUPORT_PROFILE_DIR") or "profile")
+# ブラウザの種類(KUPORT_BROWSER)とプロファイル(KUPORT_PROFILE_DIR)は MCP サーバーと同じ決め方にする
+from kuport.portal import BROWSER_CHANNEL, BROWSER_NAME, BROWSER_NAMES, PROFILE_DIR, ROOT
+
 DUMP_DIR = ROOT / "dumps"
 
 
@@ -69,11 +69,15 @@ def main() -> None:
     if not url:
         sys.exit(".env に PORTAL_URL を設定してください（.env.example を参照）")
 
+    if BROWSER_CHANNEL not in BROWSER_NAMES:
+        sys.exit(f"KUPORT_BROWSER={BROWSER_CHANNEL} には対応していません。使えるのは {', '.join(BROWSER_NAMES)} です。")
+
     DUMP_DIR.mkdir(exist_ok=True)
     with sync_playwright() as p:
-        # Windows に標準で入っている Edge を使う（Chromium の追加ダウンロードが不要）
+        # 既定は Windows に標準で入っている Edge(Chromium の追加ダウンロードが不要)。KUPORT_BROWSER=chrome で Chrome
+        print(f"{BROWSER_NAME} を起動します(プロファイル: {PROFILE_DIR})")
         context = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), channel="msedge", headless=False, viewport={"width": 1280, "height": 900}
+            str(PROFILE_DIR), channel=BROWSER_CHANNEL, headless=False, viewport={"width": 1280, "height": 900}
         )
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(url)
