@@ -637,3 +637,77 @@ def parse_attachments(html: str) -> list[dict] | None:
             "size": _clean(size[1]) if size else None,
         })
     return result
+
+
+_BOOKING_KINDS = {"zoneJugyo": "授業", "zoneResOther": "他ユーザ予約"}
+_BOOKING_RANGE = re.compile(r"^(\d{1,2}):(\d{2})\s*[～~〜]\s*(\d{1,2}):(\d{2})\s*(.*)$")
+
+
+def to_minutes(value: str) -> int | None:
+    """「9:05」「09:05」を 0 時からの分に直す。読めなければ None。"""
+    match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", value or "")
+    if not match or int(match[1]) > 24 or int(match[2]) > 59:
+        return None
+    return int(match[1]) * 60 + int(match[2])
+
+
+def format_minutes(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def parse_room_usage(html: str) -> dict:
+    """教室利用状況(Ksa008)の結果表から、教室ごとの予約(授業・他ユーザ予約)を取り出す。"""
+    result: dict = {"rooms": []}
+    for table in _soup(html).select("div.reserveRoom"):
+        # 固定ヘッダー用の複製表(教室名だけで予約を持たない)は読まない。
+        if "fixed_header_display_none_at_print" in table.get("class", []):
+            continue
+        date = None
+        for row in table.select("tbody.ui-datatable-data > tr"):
+            if "reserveDate" in row.get("class", []):
+                match = re.search(r"\d{4}/\d{2}/\d{2}", _text(row))
+                date = match[0] if match else None
+                continue
+            name = _text(row.select_one(".kstNameArea"))
+            if not name:
+                continue
+            bookings, seen = [], set()
+            for link in row.select("a.timezone"):
+                title = _clean(link.get("title") or link.get("aria-label") or _text(link))
+                match = _BOOKING_RANGE.match(title)
+                if not match or title in seen:
+                    continue
+                seen.add(title)
+                start = int(match[1]) * 60 + int(match[2])
+                end = int(match[3]) * 60 + int(match[4])
+                kind = next((label for cls, label in _BOOKING_KINDS.items() if cls in link.get("class", [])), "その他")
+                bookings.append({
+                    "start": format_minutes(start), "end": format_minutes(end),
+                    "kind": kind, "detail": match[5] or None,
+                })
+            bookings.sort(key=lambda b: (b["start"], b["end"]))
+            result["rooms"].append({"date": date, "room": name, "bookings": bookings})
+    return result
+
+
+def free_slots(bookings: list[dict], start: int, end: int, min_minutes: int = 1) -> list[dict]:
+    """予約の隙間のうち、[start, end)(分)に収まり min_minutes 分以上あるものを返す。"""
+    busy = sorted(
+        (s, e) for b in bookings
+        if (s := to_minutes(b["start"])) is not None and (e := to_minutes(b["end"])) is not None
+    )
+    slots, cursor = [], start
+    for busy_start, busy_end in busy:
+        if busy_end <= cursor:
+            continue
+        if busy_start >= end:
+            break
+        if busy_start - cursor >= min_minutes:
+            slots.append((cursor, busy_start))
+        cursor = max(cursor, busy_end)
+    if end - cursor >= min_minutes:
+        slots.append((cursor, end))
+    return [
+        {"start": format_minutes(s), "end": format_minutes(e), "minutes": e - s}
+        for s, e in slots
+    ]

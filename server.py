@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date as Date, datetime
 from typing import Any, Literal
 
 from mcp.server.mcpserver import MCPServer
@@ -38,7 +39,7 @@ async def lifespan(_server: MCPServer) -> AsyncIterator[None]:
 mcp = MCPServer(
     "kuport",
     instructions=(
-        "工学院大学の学生ポータル Ku-Port から、時間割・成績・出欠・掲示(検索・添付含む)・休講/補講・シラバス(検索含む)を取得します。"
+        "工学院大学の学生ポータル Ku-Port から、時間割・成績・出欠・掲示(検索・添付含む)・休講/補講・シラバス(検索含む)・空き教室を取得します。"
         "各ツールは実際にポータルを操作するので、1回あたり数秒〜十数秒かかります。"
         "掲示の本文を読む(read_bulletin)とその掲示はポータル上で既読になります。"
         "ログインが必要というエラーが出たら、その文面どおりの手順を利用者に伝えてください。"
@@ -226,6 +227,57 @@ async def search_syllabus(
     if not (name or teacher or keyword):
         raise ToolError("name・teacher・keyword のどれかを指定してください。")
     return parsers.parse_syllabus_search(await portal.syllabus_search(name, teacher, keyword, year, term))
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def get_vacant_rooms(
+    date: str | None = None,
+    campus: str | None = None,
+    building: str | None = None,
+    floor: int | None = None,
+    from_time: str | None = None,
+    to_time: str = "20:00",
+    min_minutes: int = 60,
+    include_bookings: bool = False,
+) -> dict[str, Any]:
+    """空き教室を探す(教室利用状況)。授業と予約が入っていない時間帯を、教室ごとに返す。
+
+    date: YYYY-MM-DD(省略時は今日)。
+    campus: 「八王子」「新宿」など / building: 「2号館」「高層棟」など(部分一致、全角半角は区別しない) / floor: 階(地下は負の数)。
+    from_time〜to_time(HH:MM)の間で、min_minutes 分以上連続して空いている時間帯がある教室だけを返す。
+    from_time の省略時は、今日なら現在時刻、それ以外の日は 09:00。
+    campus/building/floor を絞らないと結果が非常に多くなるので、できるだけ指定すること。
+    ポータルの予約情報の隙間を計算した結果で、休講になった授業の教室は「授業あり」のままになる。
+    include_bookings=True で、各教室の予約(授業名など)も返す。
+    """
+    try:
+        day = datetime.strptime(date.strip().replace("/", "-"), "%Y-%m-%d").date() if date else Date.today()
+    except ValueError:
+        raise ToolError("date は YYYY-MM-DD の形式で指定してください。") from None
+    if from_time is None:
+        now = datetime.now()
+        from_time = now.strftime("%H:%M") if day == now.date() else "09:00"
+    start, end = parsers.to_minutes(from_time), parsers.to_minutes(to_time)
+    if start is None or end is None or start >= end:
+        raise ToolError("from_time と to_time は HH:MM の形式で、from_time < to_time になるよう指定してください。")
+    if min_minutes < 1:
+        raise ToolError("min_minutes は 1 以上にしてください。")
+    floor_label = None if floor is None else (f"{floor}階" if floor > 0 else f"地下{-floor}階")
+
+    html = await portal.room_usage(day.strftime("%Y/%m/%d"), campus, building, floor_label)
+    rooms = []
+    for room in parsers.parse_room_usage(html)["rooms"]:
+        slots = parsers.free_slots(room["bookings"], start, end, min_minutes)
+        if not slots:
+            continue
+        item = {"room": room["room"], "free": slots}
+        if include_bookings:
+            item["bookings"] = room["bookings"]
+        rooms.append(item)
+    return {
+        "date": day.strftime("%Y-%m-%d"), "window": f"{parsers.format_minutes(start)}-{parsers.format_minutes(end)}",
+        "min_minutes": min_minutes, "count": len(rooms), "rooms": rooms,
+    }
 
 
 if __name__ == "__main__":

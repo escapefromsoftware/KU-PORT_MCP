@@ -20,6 +20,7 @@ Ku-Port には API がないため、Playwright で Microsoft Edge を操作し�
 | `get_class_changes` | 休講・補講・教室変更の掲示 |
 | `get_syllabus(course_code, name?, year?)` | シラバス（今学期の時間割になければ検索。その場合は授業名 `name` も渡す） |
 | `search_syllabus(name?, teacher?, keyword?, year?, term?)` | シラバス検索（履修していない授業も） |
+| `get_vacant_rooms(date?, campus?, building?, floor?, from_time?, to_time?, min_minutes?, include_bookings?)` | 空き教室（教室利用状況）。指定した時間帯に `min_minutes` 分以上連続して空いている教室と、その空き時間帯。`campus`・`building`・`floor` で絞る（絞らないと件数が多い）。休講になった授業の教室は「授業あり」のままになる |
 
 ## 必要なもの
 

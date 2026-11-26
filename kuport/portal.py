@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -622,4 +623,60 @@ class Portal:
         async def op():
             page = await self._syllabus_search_page(name, teacher, keyword, year, term)
             return await self._content(page)
+        return await self._run(op)
+
+    # ------------------------------------------------------------------ 教室利用状況(空き教室)
+
+    async def _select_like(self, page: Page, select_id: str, query: str) -> str:
+        """プルダウンから、query に一致する選択肢を1つ選ぶ。全角/半角・空白の違いは無視し、部分一致も許す。"""
+        options = await page.evaluate(
+            "id => { const s = document.getElementById(id); return s ? [...s.options].map(o => o.textContent.trim()) : null; }",
+            select_id,
+        )
+        if options is None:
+            raise PortalError(f"選択欄 {select_id} が見つかりません。画面構成が変わった可能性があります。")
+
+        def norm(text: str) -> str:
+            return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+        wanted = norm(query)
+        choices = [o for o in options if o and norm(o) != norm("すべて対象")]
+        matches = [o for o in choices if norm(o) == wanted] or [o for o in choices if wanted and wanted in norm(o)]
+        if len(matches) != 1:
+            problem = "に一致する選択肢がありません" if not matches else "に一致する選択肢が複数あります"
+            raise PortalError(f"「{query}」{problem}。選択肢: {', '.join(choices)}")
+        return await self._select(page, select_id, matches[0])
+
+    async def room_usage(
+        self, date: str, campus: str | None = None, building: str | None = None, floor: str | None = None,
+    ) -> str:
+        """教室利用状況(Ksa008)を指定日・場所で検索した結果の HTML。date は YYYY/MM/DD。"""
+        async def op():
+            page = await self._open_menu("教室利用状況", "Ksa008")
+            # ポータルは前回の検索条件(建物や「空き教室を検索する」)を覚えているので、先に全部消す。
+            # 画面上の文字「クリア」で探す(ボタンの ID は自動採番で変わる)
+            clear = page.locator("form[id='funcForm'] button").filter(has_text=re.compile(r"^\s*クリア\s*$"))
+            if not await clear.count():
+                raise PortalError("「クリア」ボタンが見つかりません。ポータルの画面構成が変わった可能性があります。")
+            await clear.first.click()
+            await asyncio.sleep(0.8)
+            await self._settle(page, 8_000)
+            # 授業のほか、予約種別が非表示だと予約済みの教室が空きに見えるので、4種類とも表示対象にする
+            for index in range(4):
+                box = page.locator(f"[id='funcForm:hyojiTaisho:{index}']")
+                if not await box.is_checked():
+                    await box.locator("xpath=ancestor::div[contains(@class,'ui-chkbox')][1]").locator(
+                        ".ui-chkbox-box"
+                    ).click()
+                    await self._settle(page, 5_000)
+            await self._fill(page, "funcForm:targetDateFrom:targetDateFrom_input", date)
+            await self._fill(page, "funcForm:targetDateTo:targetDateTo_input", date)
+            # 建物の選択肢はキャンパスで、階は建物で変わるので、上から順に選ぶ
+            if campus:
+                await self._select_like(page, "funcForm:campus_input", campus)
+            if building:
+                await self._select_like(page, "funcForm:building_input", building)
+            if floor:
+                await self._select_like(page, "funcForm:kai_input", floor)
+            return await self._submit(page, "funcForm:search")
         return await self._run(op)
